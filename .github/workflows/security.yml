@@ -1,0 +1,114 @@
+# Защищённый конвейер: сборка, тесты, анализ безопасности и шлюз.
+# Версии внешних действий зафиксированы по полному идентификатору коммита (T-08).
+# Права токена по умолчанию: только чтение (T-07).
+name: security-pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Установка зависимостей
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Тесты (TC-01…TC-05 и аутентификация)
+        run: python -m pytest -q
+
+  sast:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Установка инструмента
+        run: pip install -r requirements-dev.txt
+      # Порог Medium и выше: см. раздел 2.3 пояснительной записки
+      - name: Bandit (уровень Medium и выше блокирует сборку)
+        run: bandit -r app -ll -f json -o bandit-report.json
+      - name: Сохранение отчёта
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  deps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Установка инструмента
+        run: pip install -r requirements-dev.txt
+      - name: pip-audit (известные уязвимости блокируют сборку)
+        run: pip-audit -r requirements.txt --progress-spinner off -f json -o pip-audit-report.json
+      - name: Сохранение отчёта
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.json
+
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0          # полная история для поиска секретов (T-04)
+          persist-credentials: false
+      - name: Установка gitleaks v8.18.4 с проверкой контрольной суммы
+        env:
+          GITLEAKS_SHA256: ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d
+        run: |
+          curl -sSLo gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+      - name: gitleaks (найденный секрет блокирует сборку)
+        run: ./gitleaks detect --source . --redact --report-format json --report-path gitleaks-report.json
+      - name: Сохранение отчёта
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+
+  gate:
+    # Шлюз: запускается всегда и решает по результатам всех этапов (раздел 2.3)
+    needs: [test, sast, deps, secrets]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Решение шлюза
+        env:
+          R_TEST: ${{ needs.test.result }}
+          R_SAST: ${{ needs.sast.result }}
+          R_DEPS: ${{ needs.deps.result }}
+          R_SECRETS: ${{ needs.secrets.result }}
+        run: |
+          echo "test=$R_TEST sast=$R_SAST deps=$R_DEPS secrets=$R_SECRETS"
+          for r in "$R_TEST" "$R_SAST" "$R_DEPS" "$R_SECRETS"; do
+            if [ "$r" != "success" ]; then
+              echo "ОТКАЗ: сборка заблокирована"
+              exit 1
+            fi
+          done
+          echo "ДОПУЩЕНО: все обязательные проверки пройдены"
