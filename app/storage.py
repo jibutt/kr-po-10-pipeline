@@ -37,8 +37,7 @@ def get_ticket(db_path: str, ticket_id: int, user: str) -> dict | None:
     """Возвращает обращение только его владельцу; для чужих возвращает None."""
     conn = _connect(db_path)
     row = conn.execute(
-        "SELECT id, owner, text FROM tickets WHERE id = ? AND owner = ?",
-        (ticket_id, user),
+        f"SELECT id, owner, text FROM tickets WHERE id = {ticket_id} AND owner = '{user}'"
     ).fetchone()
     conn.close()
     return dict(row) if row else None
