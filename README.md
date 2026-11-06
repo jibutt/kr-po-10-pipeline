@@ -50,4 +50,4 @@ pip-audit -r requirements.txt
 
 - `control-sql`: небезопасное формирование SQL-запроса в `app/storage.py` (ожидается блокировка Bandit).
 - `control-secret`: файл `docs/control/test_key.txt` с тестовым ключом AWS из документации (ожидается блокировка gitleaks).
-- `control-dep`: добавление `requests==2.19.1` в requirements.txt (ожидается блокировка pip-audit).
+- `control-dep`: добавление `PyJWT==1.5.0` в requirements.txt (ожидается блокировка pip-audit). Выбран пакет, который не конфликтует с зависимостями инструментов разработки: иначе этап test падает на установке, а не на тестах.
